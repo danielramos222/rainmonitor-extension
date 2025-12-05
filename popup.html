@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Monitor de Chuva - Cemig</title>
+    <style>
+      body {
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI',
+          sans-serif;
+        margin: 0;
+        padding: 12px;
+        min-width: 260px;
+        background: #0f172a;
+        color: #e5e7eb;
+      }
+
+      h1 {
+        font-size: 16px;
+        margin: 0 0 8px;
+      }
+
+      p {
+        font-size: 13px;
+        margin: 4px 0;
+      }
+
+      .small {
+        font-size: 11px;
+        color: #9ca3af;
+      }
+
+      .status-big {
+        font-size: 14px;
+        font-weight: 600;
+        margin-top: 6px;
+      }
+
+      .radius-box {
+        margin-top: 10px;
+        padding: 8px;
+        border-radius: 6px;
+        background: #111827;
+        border: 1px solid #1f2937;
+      }
+
+      .radius-box label {
+        display: block;
+        font-size: 12px;
+        margin-bottom: 4px;
+      }
+
+      .radius-box input {
+        width: 80px;
+        padding: 3px 5px;
+        font-size: 13px;
+        border-radius: 4px;
+        border: 1px solid #4b5563;
+        background: #020617;
+        color: #e5e7eb;
+        margin-right: 6px;
+      }
+
+      a {
+        color: #60a5fa;
+        text-decoration: none;
+      }
+
+      a:hover {
+        text-decoration: underline;
+      }
+
+      button {
+        margin-top: 8px;
+        padding: 6px 10px;
+        font-size: 13px;
+        border-radius: 6px;
+        border: none;
+        cursor: pointer;
+        background: #2563eb;
+        color: white;
+      }
+
+      button:disabled {
+        opacity: 0.6;
+        cursor: default;
+      }
+
+      #status {
+        margin-top: 6px;
+        font-size: 11px;
+      }
+
+      #stationsList {
+        margin-top: 6px;
+        padding-left: 16px;
+        max-height: 140px;
+        overflow-y: auto;
+        font-size: 12px;
+      }
+
+      #stationsList li {
+        margin-bottom: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Monitor de Chuva</h1>
+
+    <p class="status-big" id="rainAnswer">Carregando status...</p>
+    <p class="small" id="lastCheck"></p>
+
+    <ul id="stationsList"></ul>
+
+    <div class="radius-box">
+      <label for="radiusInput">Raio de monitoramento da Cemig Sede (km):</label>
+      <input id="radiusInput" type="number" min="1" max="100" step="1" />
+      <button id="btnSaveRadius">Salvar raio</button>
+    </div>
+
+    <p class="small" style="margin-top: 8px">
+      Mapa completo:
+      <a
+        href="https://instarain.com.br/web/mapa"
+        target="_blank"
+        rel="noreferrer"
+        >Abrir InstaRain</a
+      >
+    </p>
+
+    <button id="btnCheck">Executar checagem agora</button>
+
+    <div id="status" class="small"></div>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
