@@ -1,5 +1,5 @@
 // rules.js
-// Motor de regras do Monitor de Chuva
+// Motor de regras do Monitor de Chuva – VERSÃO ESTRITA (apenas Clima com "chuva")
 
 import { haversineDistanceKm } from './utils.js';
 
@@ -15,48 +15,47 @@ const TARGETS = {
 };
 
 /**
- * Decide se uma estação está em condição de chuva ATIVA,
- * combinando vários campos do JSON bruto.
+ * Decide se uma estação está em condição de CHUVA ATIVA.
  *
- * Regras:
- *  - IndicadorChuva >= 1
- *  - OU houve chuva nos últimos minutos/1h
- *  - OU código de tempo indica chuva (ex.: Tempo = 6)
- *  - OU Clima contém "chuva"
+ * 🔒 Regra ESTRITA:
+ *  👉 Só é considerada chuva se o texto do campo Clima contiver "chuva".
+ *  👉 Nada de Ultimas1h, IndicadorChuva, Tempo, etc.
  */
 function stationHasRain(station) {
-  const indicador = Number(station.indicadorChuva ?? 0);
   const raw = station.raw ?? {};
 
-  // Chuva recente
-  const ult5 = Number(raw.Ultimas5m ?? 0);
-  const ult10 = Number(raw.Ultimas10m ?? 0);
-  const ult20 = Number(raw.Ultimas20m ?? 0);
-  const ult1h = Number(raw.Ultimas1h ?? 0);
+  const climaRaw = raw.Clima ?? raw.clima ?? '';
+  const clima =
+    typeof climaRaw === 'string' ? climaRaw.toLowerCase() : String(climaRaw);
 
   const tempo = Number(raw.Tempo ?? raw.tempo ?? NaN);
-  const clima = String(raw.Clima ?? raw.clima ?? '').toLowerCase();
+  const indicador = Number(raw.IndicadorChuva ?? raw.indicadorChuva ?? NaN);
 
-  // 1) Indicador explícito de chuva
-  if (Number.isFinite(indicador) && indicador >= 1) {
+  // LOG de debug para cada estação avaliada
+  console.log('[RainMonitor][Rules] Avaliando estação:', {
+    id: station.id,
+    name: station.name,
+    climaRaw,
+    clima,
+    tempo,
+    indicador
+  });
+
+  // Regra única: clima contém "chuva"
+  const hasChuvaInClima = clima.includes('chuva');
+
+  if (hasChuvaInClima) {
+    console.log(
+      '[RainMonitor][Rules] -> CHUVA DETECTADA pelo campo Clima:',
+      station.name
+    );
     return true;
   }
 
-  // 2) Chuva recente (últimos minutos / 1h)
-  if (ult5 > 0 || ult10 > 0 || ult20 > 0 || ult1h > 0) {
-    return true;
-  }
-
-  // 3) Código numérico de tempo indicando chuva
-  if (tempo === 6) {
-    return true;
-  }
-
-  // 4) Texto de clima contendo "chuva"
-  if (clima.includes('chuva')) {
-    return true;
-  }
-
+  console.log(
+    '[RainMonitor][Rules] -> SEM CHUVA (Clima não contém "chuva"):',
+    station.name
+  );
   return false;
 }
 
@@ -77,6 +76,7 @@ export async function evaluateRulesForSource(source, stations, options = {}) {
   const rainingStations = [];
 
   for (const station of stations) {
+    // Se NÃO for chuva, ignora
     if (!stationHasRain(station)) continue;
 
     const distanceKm = haversineDistanceKm(
@@ -86,15 +86,37 @@ export async function evaluateRulesForSource(source, stations, options = {}) {
       station.longitude
     );
 
+    console.log(
+      '[RainMonitor][Rules] Distância da estação até Cemig Sede:',
+      station.name,
+      distanceKm,
+      'km (raio atual:',
+      radiusKm,
+      'km)'
+    );
+
     if (distanceKm <= radiusKm) {
+      console.log(
+        '[RainMonitor][Rules] -> Estação DENTRO do raio E com chuva, adicionando:',
+        station.name
+      );
       rainingStations.push({
         station,
         distanceKm,
         target,
         radiusKm
       });
+    } else {
+      console.log(
+        '[RainMonitor][Rules] -> Estação FORA do raio, ignorando:',
+        station.name
+      );
     }
   }
+
+  console.log(
+    `[RainMonitor][Rules] Total de estações com chuva dentro do raio: ${rainingStations.length}`
+  );
 
   return rainingStations;
 }

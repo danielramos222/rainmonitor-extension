@@ -2,18 +2,18 @@
 // IMPORTANTE no manifest.json:
 // "background": { "service_worker": "background.js", "type": "module" }
 // "permissions": ["alarms", "notifications", "storage"]
-
-console.log('[RainMonitor] Background script iniciado');
+// "host_permissions": ["https://instarain.com.br/*"]
 
 import { DATA_SOURCES } from './dataSources.js';
 import { evaluateRulesForSource } from './rules.js';
 
-console.log('[RainMonitor] Módulos importados com sucesso');
-console.log('[RainMonitor] DATA_SOURCES disponíveis:', DATA_SOURCES?.length || 0);
-
 const ALARM_NAME = 'rainCheck';
 const CHECK_INTERVAL_MINUTES = 5;
 const DEFAULT_CEMIG_RADIUS_KM = 20;
+
+// ⚠ Token de autorização usado pela API InstaRain.
+// ATENÇÃO: isso fica exposto na extensão. Use apenas em ambiente controlado.
+const INSTARAIN_AUTH_TOKEN = '496f642b-9e50-4c0d-8274-e049873ba076';
 
 /* -----------------------------------------------------
    🔧 Funções de Persistência
@@ -23,7 +23,7 @@ function getCemigRadiusKm() {
   return new Promise((resolve) => {
     chrome.storage.local.get(['cemigRadiusKm'], (res) => {
       const value = Number(res.cemigRadiusKm);
-      if (Number.isFinite(value) && value > 0 && value <= 1000) {
+      if (Number.isFinite(value) && value > 0 && value <= 10000) {
         resolve(value);
       } else {
         resolve(DEFAULT_CEMIG_RADIUS_KM);
@@ -68,26 +68,35 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   }
 });
 
-// Checagem manual via popup
+/**
+ * Handler de mensagens vindas do popup:
+ * - RUN_CHECK_NOW  → força checagem geral
+ * - GET_STATION_HOURLY → busca dados estatísticos da estação
+ */
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  console.log('[RainMonitor] Mensagem recebida:', msg);
-  
   if (msg?.type === 'RUN_CHECK_NOW') {
     console.log('[RainMonitor] Checagem manual requisitada');
     runAllChecks()
-      .then(() => {
-        console.log('[RainMonitor] Checagem manual concluída com sucesso');
-        sendResponse({ ok: true });
-      })
-      .catch((err) => {
-        console.error('[RainMonitor] Erro na checagem manual:', err);
-        sendResponse({ ok: false, error: String(err) });
-      });
+      .then(() => sendResponse({ ok: true }))
+      .catch((err) => sendResponse({ ok: false, error: String(err) }));
     return true;
   }
-  
-  // Responder para outras mensagens para evitar erros
-  sendResponse({ ok: false, error: 'Tipo de mensagem não suportado' });
+
+  if (msg?.type === 'GET_STATION_HOURLY') {
+    const stationId = msg.stationId;
+    console.log('[RainMonitor] GET_STATION_HOURLY para estação:', stationId);
+
+    fetchStationHourly(stationId)
+      .then((data) => {
+        sendResponse({ ok: true, data });
+      })
+      .catch((err) => {
+        console.error('[RainMonitor] Erro em GET_STATION_HOURLY:', err);
+        sendResponse({ ok: false, error: String(err) });
+      });
+
+    return true; // resposta assíncrona
+  }
 });
 
 /* -----------------------------------------------------
@@ -111,17 +120,14 @@ function hasRainingChanged(prevStatus, nextStatus) {
 }
 
 /* -----------------------------------------------------
-   🧠 Função principal
+   🧠 Função principal de checagem
 ------------------------------------------------------ */
 
 async function runAllChecks() {
-  console.log('[RainMonitor] Iniciando runAllChecks');
-  try {
-    const radiusKm = await getCemigRadiusKm();
-    const prevStatus = await getCemigStatus();
-    console.log('[RainMonitor] Parâmetros obtidos:', { radiusKm, prevStatus: !!prevStatus });
+  const radiusKm = await getCemigRadiusKm();
+  const prevStatus = await getCemigStatus();
 
-    const allRaining = [];
+  const allRaining = [];
 
   for (const source of DATA_SOURCES) {
     try {
@@ -177,32 +183,29 @@ async function runAllChecks() {
 
       for (const m of matches) {
         const raw = m.station.raw ?? {};
+        const stationId = m.station.id;
 
-        const stationId =
-          raw.Id ?? raw.ID ?? raw.id ?? m.station.id ?? null;
-        const identifier =
-          raw.Identificador ?? raw.identificador ?? null;
-
-        // URL básica do mapa
-        let stationUrl = 'https://instarain.com.br/web/mapa';
-
-        // Tentativa de apontar para a estação (id ou identificador)
+        // URL da API da estação (estatística-hora) — UTILIZADA só como referência
+        let stationApiUrl = null;
         if (stationId != null) {
-          stationUrl += `?estacaoId=${encodeURIComponent(stationId)}`;
-        } else if (identifier != null) {
-          stationUrl += `?identificador=${encodeURIComponent(identifier)}`;
+          stationApiUrl =
+            'https://instarain.com.br/InstaRainApi/v1/meteorologicas/' +
+            encodeURIComponent(stationId) +
+            '/estatistica-hora';
         }
 
         allRaining.push({
           id: m.station.id,
+          stationId,
           name: m.station.name,
           distanceKm: m.distanceKm,
           clima: raw.Clima ?? null,
           chuvaDia: raw.ChuvaDia ?? null,
           tempo: raw.Tempo ?? null,
+          city: raw.Cidade ?? raw.cidade ?? null,
           sourceId: source.id,
           sourceName: source.name,
-          url: stationUrl
+          url: stationApiUrl
         });
       }
     } catch (error) {
@@ -246,12 +249,47 @@ async function runAllChecks() {
       sendNotification({ title, message, data: newStatus });
     }
   }
-  
-  console.log('[RainMonitor] runAllChecks concluído com sucesso');
-  } catch (error) {
-    console.error('[RainMonitor] Erro em runAllChecks:', error);
-    throw error;
+}
+
+/* -----------------------------------------------------
+   🌧️ Consulta de estatística-hora de uma estação
+------------------------------------------------------ */
+
+async function fetchStationHourly(stationId) {
+  if (stationId == null) {
+    throw new Error('stationId inválido');
   }
+
+  const url = `https://instarain.com.br/InstaRainApi/v1/meteorologicas/${encodeURIComponent(
+    stationId
+  )}/estatistica-hora`;
+
+  const headers = {
+    Accept: 'application/json',
+    authorization: INSTARAIN_AUTH_TOKEN
+  };
+
+  const resp = await fetch(url, { headers });
+
+  console.log(
+    '[RainMonitor] fetchStationHourly resposta:',
+    resp.status,
+    resp.statusText,
+    'urlFinal:',
+    resp.url
+  );
+
+  if (!resp.ok) {
+    const text = await resp.text();
+    console.error(
+      '[RainMonitor] Erro da API estatistica-hora:',
+      resp.status,
+      text.slice(0, 500)
+    );
+    throw new Error(`HTTP ${resp.status} - ${resp.statusText}`);
+  }
+
+  return resp.json();
 }
 
 /* -----------------------------------------------------
